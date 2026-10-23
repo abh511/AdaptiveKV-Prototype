@@ -1,0 +1,88 @@
+# AdaptiveKV Configuration
+# ALL tunable parameters live here. Nothing is buried in code.
+# Every key is referenced in design.md §9.
+
+# INT8/INT4 are the only supported KV-cache precisions.
+
+# ── Model ────────────────────────────────────────────────────────────────────
+model_id: "Qwen/Qwen2.5-0.5B-Instruct"
+attn_impl: "eager"           # must be eager for output_attentions=True
+dtype: "float16"             # no weight quantization
+
+# ── AdaptiveKV ────────────────────────────────────────────────────────────────
+ema_alpha: 0.1               # smoothing factor; new token init = raw score
+p8: 0.50                     # fraction of tokens assigned INT8 (increased for quality)
+p4: 0.50                     # fraction of tokens assigned INT4
+p2: 0.00                     # fraction assigned INT2 (used only when int2_enabled: true)
+int2_enabled: false          # INT2 ablation: three tiers p8/p4/p2 (must sum to 1)
+
+quant_group_size: 64         # quantization group size (== head_dim for 0.5B)
+key_quant: per_channel       # per_channel (KIVI-style keys, default) | per_token (previous design, ablation)
+key_group_tokens: 32         # per_channel: tokens sharing one key scale per channel; newest tokens stay FP16 until committed
+reassign_every: 1            # re-compute tier assignment every N steps (1=every)
+
+# Attention-sink and recent-token pins — protects critical tokens
+sink_tokens: 4               # pin first 4 tokens to INT8 (system prompt, context)
+recent_tokens: 8             # pin last 8 tokens to INT8 (recent context)
+
+# Importance approximation
+importance_window: 1         # number of last queries used (1 = last query only)
+layer_weights: null          # null = uniform over all 24 layers
+
+# ── Reproducibility ───────────────────────────────────────────────────────────
+seed: 42
+
+# ── Generation ────────────────────────────────────────────────────────────────
+max_new_tokens: 128
+
+# ── Hardware limits ───────────────────────────────────────────────────────────
+vram_budget_gb: 3.5          # if peak VRAM exceeds this, mark run N/A
+
+# ── Benchmarks ────────────────────────────────────────────────────────────────
+context_lengths: [256, 512, 1024, 2048]   # 4096 only if VRAM allows
+benchmark_samples: 20        # minimum windows/prompts per method
+benchmark_repeats: 3         # repeated runs for variance (where noise applies)
+wikitext_file: "data/wikitext2_test.txt"
+results_dir: "results"
+
+# ── Decision test (decision_test.py) ─────────────────────────────────────────
+# Two-tier vs three-tier (INT2) and adaptive vs recency, scored by teacher
+# forcing through each KV cache against FP16 on the same windows.
+decision_test:
+  n_windows: 20              # independent WikiText-2 windows (the unit of variance)
+  prefill_len: 512           # tokens prefilled into the cache
+  eval_len: 64               # teacher-forced tokens scored per window
+  bootstrap: 2000            # bootstrap resamples for 95% CIs
+  two_tier:   [[0.50, 0.50], [0.25, 0.75]]              # [p8, p4]
+  # [p8, p4, p2]; the last two use fewer bits than uniform INT4 (added after the
+  # per-channel key change made uniform INT4 the bar to beat; disclosed in the report)
+  three_tier: [[0.20, 0.30, 0.50], [0.30, 0.60, 0.10], [0.10, 0.40, 0.50], [0.05, 0.15, 0.80]]
+  old_key_ablation: true     # also run the previous per-token key scheme for comparison
+
+# ── Passkey retrieval (passkey.py) ───────────────────────────────────────────
+passkey:
+  context_lengths: [512, 1024, 2048]
+  depths: [0.1, 0.3, 0.5, 0.7, 0.9]
+  trials_per_depth: 4
+  max_new_tokens: 12
+  fractions: [[0.50, 0.50], [0.25, 0.75]]   # [p8, p4], two-tier
+  three_tier: [[0.20, 0.30, 0.50], [0.10, 0.40, 0.50]]   # [p8, p4, p2]
+
+# ── Extrapolation (benchmarks/extrapolate.py) ────────────────────────────────
+# Shapes are read from each model's config.json; results are labelled EXTRAPOLATED.
+extrapolate_models: ["Qwen/Qwen2.5-0.5B-Instruct", "Qwen/Qwen2.5-3B-Instruct", "Qwen/Qwen2.5-7B-Instruct"]
+
+# ── Importance analysis (importance_analysis.py) ─────────────────────────────
+importance_analysis:
+  n_windows: 20
+  prefill_len: 512
+  eval_len: 64
+  horizon: 16                # future steps whose attention is summed
+  decision_every: 8          # decision times inside the scored span
+  p8_values: [0.25, 0.50]
+
+# ── Hardware safety (adaptivekv/safety.py, checked before every model run) ───
+safety:
+  pause_temp_c: 80           # pause the experiment at this GPU temperature
+  resume_temp_c: 70          # continue once cooled to this
+  min_free_ram_mb: 1500      # stop cleanly below this much free system RAM

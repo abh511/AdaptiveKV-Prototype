@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AdaptiveKV</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236d5efc'/%3E%3Crect x='7' y='8' width='18' height='4' rx='2' fill='white'/%3E%3Crect x='7' y='14' width='12' height='4' rx='2' fill='white' opacity='.8'/%3E%3Crect x='7' y='20' width='7' height='4' rx='2' fill='white' opacity='.6'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f6f6fb; --bg-glow: rgba(109, 94, 252, .10);
+    --surface: #ffffff; --surface-2: #f1f1f8; --border: #e3e3ee;
+    --ink: #14141f; --ink-2: #4a4a5e; --muted: #8a8a9e;
+    --accent: #6d5efc; --accent-2: #2fb5e8; --accent-ink: #ffffff;
+    --good: #12915a; --good-bg: rgba(18, 145, 90, .10);
+    --warn: #b7791f; --warn-bg: rgba(183, 121, 31, .12);
+    --bad: #c2362f;
+    --fp16: #9a9ab0; --adaptive: #6d5efc;
+    --shadow: 0 1px 2px rgba(20, 20, 40, .04), 0 8px 24px rgba(20, 20, 40, .06);
+    --radius: 16px;
+    --mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0c0c14; --bg-glow: rgba(109, 94, 252, .18);
+      --surface: #15151f; --surface-2: #1c1c29; --border: #2a2a3b;
+      --ink: #f0f0f7; --ink-2: #b7b7c9; --muted: #7c7c92;
+      --accent: #8b7fff; --accent-2: #45c6f2;
+      --good: #3ccf8e; --good-bg: rgba(60, 207, 142, .12);
+      --warn: #f0b44c; --warn-bg: rgba(240, 180, 76, .12);
+      --fp16: #6c6c84; --adaptive: #8b7fff;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 12px 32px rgba(0, 0, 0, .35);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0c0c14; --bg-glow: rgba(109, 94, 252, .18);
+    --surface: #15151f; --surface-2: #1c1c29; --border: #2a2a3b;
+    --ink: #f0f0f7; --ink-2: #b7b7c9; --muted: #7c7c92;
+    --accent: #8b7fff; --accent-2: #45c6f2;
+    --good: #3ccf8e; --good-bg: rgba(60, 207, 142, .12);
+    --warn: #f0b44c; --warn-bg: rgba(240, 180, 76, .12);
+    --fp16: #6c6c84; --adaptive: #8b7fff;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 12px 32px rgba(0, 0, 0, .35);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: radial-gradient(1100px 520px at 50% -160px, var(--bg-glow), transparent 70%), var(--bg);
+    color: var(--ink);
+    font: 15px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px 64px; }
+
+  /* top bar */
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 20px 0; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: -.01em; }
+  .logo { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+          background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .top-right { display: flex; align-items: center; gap: 8px; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+          background: var(--surface); border: 1px solid var(--border); font-size: 13px; color: var(--ink-2);
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 58vw; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.ready { background: var(--good); box-shadow: 0 0 0 4px var(--good-bg); }
+  .dot.loading { background: var(--warn); animation: pulse 1.2s infinite; }
+  .dot.error { background: var(--bad); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .icon-btn { width: 34px; height: 34px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface);
+              color: var(--ink-2); cursor: pointer; display: grid; place-items: center; }
+  .icon-btn:hover { color: var(--ink); }
+
+  /* hero */
+  .hero { padding: 28px 0 26px; }
+  .eyebrow { display: inline-block; font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+             color: var(--accent); margin-bottom: 10px; }
+  h1 { font-size: clamp(30px, 5vw, 46px); line-height: 1.08; letter-spacing: -.03em; margin: 0 0 12px; }
+  h1 .grad { background: linear-gradient(90deg, var(--accent), var(--accent-2)); -webkit-background-clip: text;
+             background-clip: text; color: transparent; }
+  .lede { color: var(--ink-2); max-width: 640px; margin: 0; font-size: 16px; }
+
+  /* cards */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+  .composer { padding: 18px; }
+  label.field { display: block; font-size: 13px; font-weight: 600; color: var(--ink-2); margin-bottom: 8px; }
+  textarea { width: 100%; min-height: 96px; resize: vertical; border-radius: 12px; border: 1px solid var(--border);
+             background: var(--surface-2); color: var(--ink); padding: 12px 14px; font: inherit; outline: none;
+             transition: border-color .15s, box-shadow .15s; }
+  textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--bg-glow); }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px; }
+  .chip { border: 1px dashed var(--border); background: transparent; color: var(--ink-2); border-radius: 999px;
+          padding: 4px 11px; font: inherit; font-size: 12.5px; cursor: pointer; }
+  .chip:hover { border-style: solid; color: var(--ink); }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 18px 26px; margin-top: 16px; }
+  .slider { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--ink-2); }
+  .slider output { font-family: var(--mono); color: var(--ink); min-width: 28px; }
+  input[type=range] { accent-color: var(--accent); width: 160px; }
+  .switch { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink-2); cursor: pointer; user-select: none; }
+  .switch input { display: none; }
+  .track { width: 38px; height: 22px; border-radius: 999px; background: var(--border); position: relative; transition: background .2s; }
+  .track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+                  background: #fff; transition: transform .2s; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+  .switch input:checked + .track { background: var(--accent); }
+  .switch input:checked + .track::after { transform: translateX(16px); }
+  .run { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; border: 0; cursor: pointer;
+         padding: 11px 22px; border-radius: 12px; font: inherit; font-weight: 600; color: var(--accent-ink);
+         background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 6px 18px rgba(109, 94, 252, .35);
+         transition: transform .1s, filter .15s, opacity .15s; }
+  .run:hover { filter: brightness(1.07); }
+  .run:active { transform: translateY(1px); }
+  .run:disabled { opacity: .55; cursor: not-allowed; box-shadow: none; }
+  .spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(255,255,255,.45); border-top-color: #fff;
+             animation: spin .8s linear infinite; display: none; }
+  .run.busy .spinner { display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .msg { margin-top: 12px; font-size: 13.5px; color: var(--bad); display: none; }
+
+  /* results */
+  #results { margin-top: 28px; display: none; }
+  #results.show { display: block; animation: rise .35s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+  .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 30px 0 12px; }
+  .section-title h2 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
+  .section-title span { font-size: 12.5px; color: var(--muted); }
+
+  .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+  .kpi { padding: 16px 18px; position: relative; overflow: hidden; }
+  .kpi .k { font-size: 12.5px; color: var(--muted); font-weight: 600; }
+  .kpi .v { font-size: 26px; font-weight: 700; letter-spacing: -.02em; margin: 6px 0 4px; font-variant-numeric: tabular-nums; }
+  .kpi .v small { font-size: 14px; font-weight: 600; color: var(--ink-2); margin-left: 3px; }
+  .kpi .s { font-size: 12.5px; color: var(--ink-2); }
+  .delta { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-right: 6px; }
+  .delta.good { color: var(--good); background: var(--good-bg); }
+  .delta.warn { color: var(--warn); background: var(--warn-bg); }
+  .delta.flat { color: var(--ink-2); background: var(--surface-2); }
+  .kpi.hero-kpi::before { content: ""; position: absolute; inset: 0 0 auto; height: 3px;
+                          background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+
+  .bars { padding: 18px 20px; display: grid; gap: 14px; }
+  .bar-row { display: grid; grid-template-columns: 90px 1fr 92px; align-items: center; gap: 14px; font-size: 13px; }
+  .bar-row .name { color: var(--ink-2); font-weight: 600; }
+  .bar-row .val { text-align: right; font-family: var(--mono); font-size: 12.5px; }
+  .bar { height: 14px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; border-radius: 999px; transition: width .9s cubic-bezier(.2,.8,.2,1); }
+  .bar.fp16 > i { background: var(--fp16); }
+  .bar.adaptive > i { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+
+  .outputs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .out { padding: 16px 18px; }
+  .out-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .tag { font-size: 12px; font-weight: 700; letter-spacing: .04em; padding: 3px 10px; border-radius: 999px; }
+  .tag.fp16 { background: var(--surface-2); color: var(--ink-2); }
+  .tag.adaptive { background: var(--bg-glow); color: var(--accent); }
+  .out-head .meta { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+  .out p { margin: 0; white-space: pre-wrap; word-wrap: break-word; font-size: 14.5px; }
+  .agree { margin-top: 12px; padding: 12px 16px; display: flex; align-items: center; gap: 14px; font-size: 13.5px; color: var(--ink-2); }
+  .ring { --p: 0; width: 42px; height: 42px; border-radius: 50%; flex: none;
+          background: conic-gradient(var(--good) calc(var(--p) * 1%), var(--surface-2) 0); display: grid; place-items: center; }
+  .ring::after { content: ""; width: 30px; height: 30px; border-radius: 50%; background: var(--surface); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--border); }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+  td.num { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+  .table-card { overflow-x: auto; }
+
+  details { margin-top: 14px; }
+  summary { cursor: pointer; font-size: 13.5px; color: var(--ink-2); font-weight: 600; padding: 4px 0; }
+  .settings { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin-top: 10px; }
+  .setting { padding: 10px 12px; border-radius: 10px; background: var(--surface-2); font-size: 12.5px; }
+  .setting b { display: block; color: var(--muted); font-weight: 600; font-size: 11.5px; }
+  .setting span { font-family: var(--mono); }
+  .note { font-size: 12.5px; color: var(--muted); margin-top: 10px; max-width: 760px; }
+
+  .skeleton { display: none; margin-top: 28px; gap: 14px; grid-template-columns: repeat(4, 1fr); }
+  .skeleton.show { display: grid; }
+  .skeleton div { height: 104px; border-radius: var(--radius); background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 50%, var(--surface) 75%);
+                  background-size: 200% 100%; animation: shimmer 1.2s infinite; border: 1px solid var(--border); }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+
+  footer { margin-top: 48px; font-size: 12.5px; color: var(--muted); text-align: center; }
+
+  @media (max-width: 820px) {
+    .kpis, .skeleton { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .outputs { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 480px) {
+    .wrap { padding: 0 16px 48px; }
+    .top-right { min-width: 0; }
+    .pill { max-width: calc(100vw - 210px); }
+    #status-text { overflow: hidden; text-overflow: ellipsis; }
+    .run { margin-left: 0; width: 100%; justify-content: center; }
+    .bar-row { grid-template-columns: 70px 1fr 78px; gap: 10px; }
+    .kpi .v { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="logo">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="#fff" aria-hidden="true">
+          <rect x="1" y="2" width="14" height="3" rx="1.5"/><rect x="1" y="6.5" width="9" height="3" rx="1.5" opacity=".8"/>
+          <rect x="1" y="11" width="5" height="3" rx="1.5" opacity=".6"/>
+        </svg>
+      </div>
+      AdaptiveKV
+    </div>
+    <div class="top-right">
+      <div class="pill" id="status"><span class="dot loading" id="status-dot"></span><span id="status-text">Loading model…</span></div>
+      <button class="icon-btn" id="theme" title="Toggle theme" aria-label="Toggle theme">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <section class="hero">
+    <span class="eyebrow">Attention-guided mixed-precision KV cache</span>
+    <h1>Same prompt. <span class="grad">Smaller memory.</span><br>Measured live.</h1>
+    <p class="lede">Runs the model twice on your prompt: once with the normal FP16 KV cache, once with AdaptiveKV,
+      which stores each cached token at INT8 or INT4 depending on how much attention it receives.
+      Every number below is measured on this machine.</p>
+  </section>
+
+  <section class="card composer">
+    <label class="field" for="prompt">Prompt</label>
+    <textarea id="prompt">What is the capital of France?</textarea>
+    <div class="chips" id="chips">
+      <button class="chip">Explain how a KV cache works in two sentences.</button>
+      <button class="chip">Write a haiku about memory.</button>
+      <button class="chip">List three uses of quantization in deep learning.</button>
+    </div>
+    <div class="controls">
+      <div class="slider">
+        <span>Max new tokens</span>
+        <input type="range" id="max" min="8" max="128" value="48">
+        <output id="max-out">48</output>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="chat" checked><span class="track"></span>
+        Chat template
+      </label>
+      <button class="run" id="run" disabled><span class="spinner"></span><span id="run-label">Run comparison</span></button>
+    </div>
+    <div class="msg" id="msg"></div>
+  </section>
+
+  <div class="skeleton" id="skeleton"><div></div><div></div><div></div><div></div></div>
+
+  <section id="results">
+    <div class="section-title"><h2>Results</h2><span>Adaptive compared with FP16</span></div>
+    <div class="kpis">
+      <div class="card kpi hero-kpi"><div class="k">KV memory per token</div><div class="v" id="k-mem"></div><div class="s" id="k-mem-s"></div></div>
+      <div class="card kpi"><div class="k">Compression</div><div class="v" id="k-comp"></div><div class="s">stored bytes, FP16 ÷ Adaptive</div></div>
+      <div class="card kpi"><div class="k">Effective bits per value</div><div class="v" id="k-bits"></div><div class="s" id="k-bits-s"></div></div>
+      <div class="card kpi"><div class="k">Speed</div><div class="v" id="k-speed"></div><div class="s" id="k-speed-s"></div></div>
+    </div>
+
+    <div class="section-title"><h2>Stored KV memory per token</h2><span>scales and zero-points included</span></div>
+    <div class="card bars">
+      <div class="bar-row"><span class="name">FP16</span><div class="bar fp16"><i id="b-fp16"></i></div><span class="val" id="bv-fp16"></span></div>
+      <div class="bar-row"><span class="name">Adaptive</span><div class="bar adaptive"><i id="b-ad"></i></div><span class="val" id="bv-ad"></span></div>
+    </div>
+
+    <div class="section-title"><h2>Outputs</h2><span id="agree-short"></span></div>
+    <div class="outputs">
+      <div class="card out"><div class="out-head"><span class="tag fp16">FP16</span><span class="meta" id="m-fp16"></span></div><p id="o-fp16"></p></div>
+      <div class="card out"><div class="out-head"><span class="tag adaptive">ADAPTIVE</span><span class="meta" id="m-ad"></span></div><p id="o-ad"></p></div>
+    </div>
+    <div class="card agree"><div class="ring" id="ring"></div><div id="agree-text"></div></div>
+
+    <div class="section-title"><h2>All measurements</h2><span>negative memory change = reduction</span></div>
+    <div class="card table-card">
+      <table>
+        <thead><tr><th>Metric</th><th>FP16</th><th>Adaptive</th><th>Change</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <p class="note">KV memory is the packed bytes stored between steps. Peak GPU memory is not reduced (and can increase):
+      each step rebuilds the full-precision cache for attention, and decoding is slower without a fused GPU kernel.
+      Compare speed (tok/s), not latency, when the two runs generate different numbers of tokens.</p>
+
+    <details>
+      <summary>Settings used</summary>
+      <div class="settings" id="settings"></div>
+    </details>
+  </section>
+
+  <footer>AdaptiveKV prototype · numbers measured live by the same engine as the experiments in results/</footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmtBytes = (b) => b >= 1048576 ? (b / 1048576).toFixed(2) + " MB" : (b / 1024).toFixed(1) + " KB";
+const pct = (n, o) => (!o || !isFinite(n) || !isFinite(o)) ? null : (n - o) / o * 100;
+const pctStr = (p) => p === null ? "n/a" : (p > 0 ? "+" : "") + p.toFixed(1) + "%";
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const TIER = { 16: "FP16 window", 8: "INT8", 4: "INT4", 2: "INT2" };
+
+// theme toggle (per-viewer convenience only)
+(() => {
+  try { const t = localStorage.getItem("akv-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  $("theme").onclick = () => {
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    const cur = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+    const next = cur === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("akv-theme", next); } catch (e) {}
+  };
+})();
+
+$("max").oninput = (e) => { $("max-out").textContent = e.target.value; };
+document.querySelectorAll(".chip").forEach((c) => c.onclick = () => { $("prompt").value = c.textContent; $("prompt").focus(); });
+$("prompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) run(); });
+
+function setStatus(kind, text) {
+  $("status-dot").className = "dot " + kind;
+  $("status-text").textContent = text;
+}
+
+let settings = null;
+async function poll() {
+  try {
+    const r = await fetch("/api/info");
+    const j = await r.json();
+    if (j.status === "ready") {
+      settings = j.settings;
+      setStatus("ready", `${settings.model_id.split("/").pop()} · ${j.gpu}`);
+      $("run").disabled = false;
+      if (location.hash === "#run") run();     // open /#run to start a comparison straight away
+      return;
+    }
+    if (j.status === "error") { setStatus("error", "Model failed to load"); showMsg(j.error); return; }
+    setStatus("loading", `Loading model on ${j.gpu}…`);
+  } catch (e) {
+    setStatus("error", "Server not reachable");
+  }
+  setTimeout(poll, 1500);
+}
+poll();
+
+function showMsg(t) { $("msg").textContent = t; $("msg").style.display = t ? "block" : "none"; }
+
+function delta(p, goodWhenDown) {
+  if (p === null) return `<span class="delta flat">n/a</span>`;
+  const better = goodWhenDown ? p < 0 : p > 0;
+  const cls = Math.abs(p) < 0.5 ? "flat" : better ? "good" : "warn";
+  return `<span class="delta ${cls}">${pctStr(p)}</span>`;
+}
+
+async function run() {
+  const prompt = $("prompt").value.trim();
+  if (!prompt) { showMsg("Enter a prompt first."); return; }
+  if ($("run").disabled) return;
+  showMsg("");
+  $("run").disabled = true; $("run").classList.add("busy"); $("run-label").textContent = "Running FP16, then Adaptive…";
+  $("results").classList.remove("show"); $("skeleton").classList.add("show");
+  try {
+    const r = await fetch("/api/run", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, max_new_tokens: +$("max").value, use_chat: $("chat").checked }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "Run failed");
+    render(j);
+  } catch (e) {
+    showMsg(e.message);
+  } finally {
+    $("skeleton").classList.remove("show");
+    $("run").disabled = false; $("run").classList.remove("busy"); $("run-label").textContent = "Run comparison";
+  }
+}
+$("run").onclick = run;
+
+function render(d) {
+  const f = d.fp16, a = d.adaptive;
+  const memP = pct(a.kv_bytes_per_token, f.kv_bytes_per_token);
+  const ratio = a.kv_bytes_per_token ? f.kv_bytes_per_token / a.kv_bytes_per_token : NaN;
+
+  $("k-mem").innerHTML = fmtBytes(a.kv_bytes_per_token).replace(/ (KB|MB)/, "<small>$1</small>");
+  $("k-mem-s").innerHTML = delta(memP, true) + `vs ${fmtBytes(f.kv_bytes_per_token)} FP16`;
+  $("k-comp").innerHTML = isFinite(ratio) ? ratio.toFixed(2) + "<small>×</small>" : "n/a";
+  $("k-bits").innerHTML = a.effective_bits.toFixed(2) + "<small>bits</small>";
+  $("k-bits-s").innerHTML = delta(pct(a.effective_bits, f.effective_bits), true) + `vs ${f.effective_bits.toFixed(2)} FP16`;
+  $("k-speed").innerHTML = a.tokens_per_sec.toFixed(1) + "<small>tok/s</small>";
+  $("k-speed-s").innerHTML = delta(pct(a.tokens_per_sec, f.tokens_per_sec), false) + `vs ${f.tokens_per_sec.toFixed(1)} FP16`;
+
+  const max = Math.max(f.kv_bytes_per_token, a.kv_bytes_per_token);
+  $("bv-fp16").textContent = fmtBytes(f.kv_bytes_per_token);
+  $("bv-ad").textContent = fmtBytes(a.kv_bytes_per_token);
+  $("b-fp16").style.width = "0"; $("b-ad").style.width = "0";
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    $("b-fp16").style.width = (f.kv_bytes_per_token / max * 100) + "%";
+    $("b-ad").style.width = (a.kv_bytes_per_token / max * 100) + "%";
+  }));
+
+  $("o-fp16").textContent = f.text || "(empty)";
+  $("o-ad").textContent = a.text || "(empty)";
+  $("m-fp16").textContent = `${f.generated_tokens} tokens`;
+  $("m-ad").textContent = `${a.generated_tokens} tokens`;
+  const ag = d.agreement * 100;
+  $("ring").style.setProperty("--p", ag.toFixed(1));
+  $("agree-short").textContent = `${ag.toFixed(1)}% token agreement`;
+  $("agree-text").innerHTML = `<b>${ag.toFixed(1)}%</b> of generated tokens match FP16` +
+    (d.first_divergence === null ? " · outputs are identical." : ` · first difference at generated token ${d.first_divergence}.`);
+
+  const mix = Object.entries(d.tier_share).map(([t, s]) => `${TIER[t] || t} ${(s * 100).toFixed(0)}%`).join(" · ");
+  const rows = [
+    ["KV memory stored", `${fmtBytes(f.kv_bytes)} (${f.kv_tokens} tok)`, `${fmtBytes(a.kv_bytes)} (${a.kv_tokens} tok)`, ""],
+    ["KV memory per token", fmtBytes(f.kv_bytes_per_token), fmtBytes(a.kv_bytes_per_token), pctStr(memP)],
+    ["Effective bits per value", f.effective_bits.toFixed(2), a.effective_bits.toFixed(2), pctStr(pct(a.effective_bits, f.effective_bits))],
+    ["Tier mix", "all FP16", mix, ""],
+    ["GPU peak memory (incl. weights)", fmtBytes(f.peak_vram_bytes), fmtBytes(a.peak_vram_bytes), pctStr(pct(a.peak_vram_bytes, f.peak_vram_bytes))],
+    ["Tokens generated", f.generated_tokens, a.generated_tokens, ""],
+    ["Latency", f.latency_s.toFixed(2) + " s", a.latency_s.toFixed(2) + " s", pctStr(pct(a.latency_s, f.latency_s))],
+    ["Speed", f.tokens_per_sec.toFixed(1) + " tok/s", a.tokens_per_sec.toFixed(1) + " tok/s", pctStr(pct(a.tokens_per_sec, f.tokens_per_sec))],
+  ];
+  $("rows").innerHTML = rows.map(([m, x, y, c]) =>
+    `<tr><td>${esc(m)}</td><td class="num">${esc(x)}</td><td class="num">${esc(y)}</td><td class="num">${esc(c)}</td></tr>`).join("");
+
+  if (settings) {
+    $("settings").innerHTML = Object.entries(settings).map(([k, v]) =>
+      `<div class="setting"><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join("");
+  }
+  $("results").classList.add("show");
+  $("results").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+</script>
+</body>
+</html>

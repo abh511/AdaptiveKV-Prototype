@@ -1,0 +1,1 @@
+{"method": "fp16", "model": "Qwen/Qwen2.5-0.5B-Instruct", "metric": "perplexity", "perplexity": 18.599871839649435, "ppl_context_length": 256, "ppl_stride": 128, "dataset_file": "wikitext2_test.txt", "config_hash": "3b1ecae5", "hardware": "NVIDIA GeForce RTX 3050 Laptop GPU", "timestamp": "2026-10-13T11:30:23.419162", "note": "FP16 model, no KV quantization during scoring"}
